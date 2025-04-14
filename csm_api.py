@@ -2,7 +2,6 @@ import re
 import os
 from glob import glob
 import shutil
-import getpass
 import requests
 import xmltodict
 from time import sleep
@@ -11,9 +10,10 @@ from math import ceil
 import pandas as pd
 from datetime import datetime, timedelta
 import urllib3
-from common_utils import file_up_to_date, set_logger, file2str, str2file, run_task
-import csm_cfg
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+from common_utils import *
+import csm_cfg
+from csm_cfg import *
 
 my_logger = None
 exit_flag = False
@@ -21,8 +21,6 @@ session = None
 cookie = ''
 max_policy_rules = 500
 excel_cell_text_lmt = 32767
-dev_exclude_regex = r'[_-](sys|admin|prd)(_|-|$)'  # (fss|ps|rits|swf)
-# policy_list = ['DeviceAccessRuleUnifiedFirewallPolicy']
 policy_obj_types = [
     'NetworkPolicyObject', 
     'ServicePolicyObject', 
@@ -58,7 +56,6 @@ def get_policy_types():
 
 def init_session(**kwargs):
     global session
-    csm = kwargs.get('csm')
     headers = {
         "Host": csm,
         'Content-Type': 'application/xml', 
@@ -68,13 +65,12 @@ def init_session(**kwargs):
     session.headers.update(headers)
 
 def csm_post(**kwargs):
-    global session
+    global session, cookie
     retry = kwargs.get('retry', 0)
     debug = kwargs.get('debug', False)
     code_flag = kwargs.get('code_flag', False)
     save_cookie = kwargs.get('save_cookie', False)
     cookie_file = kwargs.get('cookie_file', 'cookie.txt')
-    csm = kwargs.get('csm', csm_cfg.csm)
     svc = kwargs.get('svc', 'configservice')  # utilservice 
     url_func = kwargs.get('url_func')
     if svc:
@@ -107,20 +103,20 @@ def csm_post(**kwargs):
             response_code = response.status_code
             if response_code == 200:
                 print(f"\n{url_func} successful!")
-                if save_cookie:
+                if url_func in ['login']:
                     cookie = response.cookies.get_dict()['asCookie']
                     print(f"cookie: {cookie}")
-                    str2file(file=cookie_file, str=cookie)
+                    if save_cookie:
+                        str2file(file=cookie_file, str=cookie)
             else:
-                my_logger.info(f"\n{url_func} failed: {response_code}")
-                my_logger.info(result)
+                my_logger.info(f"{_url}:\n{response_code}\n{result}")
             
-            if not retry or "<error>" not in result or i + 1 > retry:
+            if "<error>" not in result or i + 1 > retry:
                 break
             my_logger.info(f"Retry after error: {i + 1}")
 
     except Exception as e:
-        my_logger.info(f"Error occurred during {url_func}: {e}")
+        my_logger.info(f"{_url}:\n{e}")
 
     if code_flag:
         if response_code == 200:
@@ -132,24 +128,23 @@ def csm_post(**kwargs):
 
 def csm_ping(**kwargs):
     global session, cookie
+    save_cookie = kwargs.get('save_cookie', False)
     cookie_file = kwargs.get('cookie_file', 'cookie.txt')
     cookie_file = Path(cookie_file)
-    if os.path.exists(cookie_file):
-        file_cookie = file2str(file=cookie_file)
-        if file_cookie != cookie:
-            cookie = file_cookie
-            print(f'\nLoad cookie from file: {cookie}')
-    else:
-        if cookie:
+    if cookie:
+        if save_cookie:
             str2file(str=cookie, file=cookie_file)
             print(f'\nSave cookie to file: {cookie}')
+    else:
+        if os.path.exists(cookie_file):
+            cookie = file2str(file=cookie_file)
+            print(f'\nLoad cookie from file: {cookie}')
         else:
             print('\nNo cookie')
             return False
     
     init_session(**kwargs)
     print(f"add cookie to session: {cookie}")
-    csm = kwargs.get('csm')
     session.cookies.set('asCookie', cookie, path='/', domain=f'{csm}.local')        
     
     url_func = 'ping'
@@ -159,13 +154,14 @@ def csm_ping(**kwargs):
 def csm_Login(**kwargs):
     init_session(**kwargs)
     cookie_file = kwargs.get('cookie_file')
+    save_cookie = kwargs.get('save_cookie', False)
     url_func = 'login'
     xml_func = 'loginRequest'
     xml_args = f"""
-    <username>{getpass.getuser()}</username>
-    <password>{getpass.getpass("RSA PIN+Token:")}</password>
+    <username>{svc_usr}</username>
+    <password>{svc_pwd}</password>
     """.strip()
-    return csm_post(svc='', url_func=url_func, xml_func=xml_func, xml_args=xml_args, code_flag=True, save_cookie=True, cookie_file=cookie_file)
+    return csm_post(svc='', url_func=url_func, xml_func=xml_func, xml_args=xml_args, code_flag=True, save_cookie=save_cookie, cookie_file=cookie_file)
 
 def csm_Logout(**kwargs):
     if csm_ping(**kwargs):
@@ -328,25 +324,11 @@ def csm_GetHitcountDetailsByGID(**kwargs):
     """ + policy_rules_str
     return csm_post(url_func=url_func, xml_func=xml_func, xml_args=xml_args)
 
-def xml2df(**kwargs):
-    xml_file = kwargs.get('xml_file')
-    save_csv = kwargs.get('save_csv', True)
-    csv = kwargs.get('csv', xml_file[:-3] + 'csv')
-    xpath = kwargs.get('xpath')
-    ns = kwargs.get('ns', {'ns1':'csm'})
-    df = pd.read_xml(xml_file, xpath=xpath, namespaces=ns)
-    if save_csv:
-        df.to_csv(csv, index=False)
-    return df
-
-# xml2df(xml_file='csm_group_list.xml', xpath="//deviceGroup", ns={'ns1':'csm'}, csv='csm_group_list.csv')
-# xml2df(xml_file='csm_device_list.xml', xpath="//deviceId")
-
 def csm_get_group_dev_list(**kwargs):
     data_dir = kwargs.get('dir')
     cmd_list = [
         (csm_GetGroupList, data_dir + fr'\csm.groups.xml'),
-        (csm_GetDeviceListByCapability, data_dir + fr'\csm.devices.xml'),
+        # (csm_GetDeviceListByCapability, data_dir + fr'\csm.devices.xml'),
     ]
     
     for func, fname in cmd_list:
@@ -373,7 +355,7 @@ def csm_get_dev_policy(**kwargs):
     xml_file = fr'{data_dir}\{dev}.policy.xml'
     str2file(file=xml_file, str=result)
     if ' failed:' in result:
-        my_logger.info(f"\n{dev} policy error")
+        my_logger.info(f"{dev} policy error")
         return
     
     with open(xml_file) as fd:
@@ -381,7 +363,7 @@ def csm_get_dev_policy(**kwargs):
     
     dev_policy_dict = doc['csm:policyListDeviceResponse']['policyList']
     if not dev_policy_dict or 'policyDesc' not in dev_policy_dict.keys():
-        my_logger.info(f"\n{dev} no policy")
+        my_logger.info(f"{dev} no policy")
         return
     
     dev_policy_items = dev_policy_dict['policyDesc']
@@ -419,23 +401,14 @@ def csm_get_all_policy_objects(**kwargs):
         fname = data_dir + fr'\csm.{policy_obj_type}.xml'
         str2file(file=fname, str=result)
 
-def csm_devices_2_df(**kwargs):
-    debug = kwargs.get('debug', False)
-    xml_file = kwargs.get('xml_file')
-    csv_file = kwargs.get('csv', xml_file[:-3] + 'csv')
-    with open(xml_file) as fd:
-        doc = xmltodict.parse(fd.read(), process_namespaces=True)
-    _list = doc['csm:deviceListResponse']['deviceId']
-    df = pd.DataFrame(_list)
-    df.to_csv(csv_file, index=False)
-    print(f'{Path(xml_file).name} -> {Path(csv_file).name}')
-    return df
-
 def csm_groups_2_df(**kwargs):
-    save_csv = kwargs.get('save_csv', True)
     debug = kwargs.get('debug', False)
     xml_file = kwargs.get('xml_file')
-    csv_file = kwargs.get('csv', xml_file[:-3] + 'csv')
+    save_file = kwargs.get('save_file', xml_file[:-3] + 'xlsx')
+    if os.path.exists(save_file):
+        df = pd.read_excel(save_file)
+        return df
+
     with open(xml_file) as fd:
         doc = xmltodict.parse(fd.read(), process_namespaces=True)
     L2_list = doc['csm:groupListResponse']['deviceGroup']['deviceGroup']
@@ -511,28 +484,12 @@ def csm_groups_2_df(**kwargs):
         if debug:
             print('\n')
     
-    if save_csv:
-        df.to_csv(csv_file, index=False)
-        print(f'{Path(xml_file).name} -> {Path(csv_file).name}')
-    return df
-
-def csm_obj_2_df(**kwargs):
-    debug = kwargs.get('debug', False)
-    xml_file = kwargs.get('xml_file')
-    csv_file = kwargs.get('csv', xml_file[:-3] + 'csv')
-    xml_obj_type = kwargs.get('xml_obj_type')
-    df = pd.DataFrame()
-    with open(xml_file) as fd:
-        doc = xmltodict.parse(fd.read(), process_namespaces=True)    
-    obj_list = doc['csm:policyObjectConfigResponse']['policyObject'][xml_obj_type]
-    df = pd.DataFrame(obj_list)
-    df.to_csv(csv_file, index=False)
-    print(f'{Path(xml_file).name} -> {Path(csv_file).name}')
+    df.to_excel(save_file, index=False)
+    print(f'{Path(xml_file).name} -> {Path(save_file).name}')
     return df
 
 def save_item_in_ext_file(**kwargs):
     data_dir = kwargs.get('dir')
-    dev = kwargs.get('dev')
     df = kwargs.get('df')
     item_name = kwargs.get('item')  # 'refGIDs'
     if item_name in df.columns:
@@ -563,14 +520,13 @@ def csm_dev_policy_2_sheet(**kwargs):
     dev = kwargs.get('dev')
     xml_file = Path(data_dir + fr'\{dev}.policy.xml')
     if not os.path.exists(xml_file):
-        my_logger.info(f"\n{dev} no {xml_file.name}")
+        my_logger.info(f"{dev} no {xml_file.name}")
         return
     with open(xml_file) as fd:
         doc = xmltodict.parse(fd.read(), process_namespaces=True)    
     policy_list = doc['csm:policyListDeviceResponse']['policyList']
-    # df = xml2df(xml_file=f'{dev}.policy.xml', xpath="//policyDesc", save_csv=False).dropna()
     if not policy_list:
-        my_logger.info(f"\n{dev} no policy")
+        my_logger.info(f"{dev} no policy")
         return
     
     policy_items = policy_list['policyDesc']
@@ -578,7 +534,7 @@ def csm_dev_policy_2_sheet(**kwargs):
         policy_items = [policy_items]
     df = pd.DataFrame(policy_items)
     if df.empty:
-        my_logger.info(f"\n{dev} no policy")
+        my_logger.info(f"{dev} no policy")
         return
 
     dev_policy_types = df['type'].tolist()
@@ -649,28 +605,30 @@ def csm_dev_policy_2_sheet(**kwargs):
         writer.close()
 
 def csm_get_gid_dev_items(**kwargs):
-    save_csv = kwargs.get('save_csv', True)
     data_dir = kwargs.get('dir')
     xml_file = kwargs.get('xml_file', 'csm.groups.xml')
     xml_file = data_dir + fr'\{xml_file}'
-    df = csm_groups_2_df(xml_file=xml_file, save_csv=save_csv)[['gid', 'name']].drop_duplicates().sort_values('name', key=lambda col: col.str.lower())
+    excel_file = kwargs.get('xml_file', 'csm.groups.xlsx')
+    excel_file = data_dir + fr'\{excel_file}'
+    df = csm_groups_2_df(xml_file=xml_file, save_file=excel_file)[['gid', 'name']].drop_duplicates().sort_values('name', key=lambda col: col.str.lower())    
     return list(df.itertuples(index=False, name=None))
 
 def csm_all_dev_policy_2_sheet(**kwargs):
     gid_dev_items = kwargs.get('gid_dev_items')
     dev_regex = kwargs.get('dev_regex')
+    data_dir = kwargs.get('dir')
     for gid, dev in gid_dev_items:
         if re.search(dev_exclude_regex, dev) or (dev_regex and not re.search(dev_regex, dev)):
-            my_logger.info(f"\nskip {dev}")
+            my_logger.info(f"skip {dev}")
             continue
-        csm_dev_policy_2_sheet(**kwargs, dev=dev, gid=gid)
+        csm_dev_policy_2_sheet(**kwargs, dev=dev, gid=gid)    
+    [f.unlink() for f in Path(data_dir).glob("*.xml")]
 
 def csm_get_info(**kwargs):
-    csm = kwargs.get('csm')
     data_dir = kwargs.get('dir')
     dev_regex = kwargs.get('dev_regex')
     mode = kwargs.get('mode')
-    if not csm_ping(csm=csm, cookie_file=data_dir + fr'\cookie.txt'):
+    if not csm_ping(cookie_file=data_dir + fr'\cookie.txt'):
         return
     if mode in ['all']:
         csm_get_all_shared_policy(**kwargs)
@@ -679,14 +637,14 @@ def csm_get_info(**kwargs):
     gid_dev_items = csm_get_gid_dev_items(**kwargs)
     for gid, dev in gid_dev_items:        
         if re.search(dev_exclude_regex, dev) or (dev_regex and not re.search(dev_regex, dev)):
-            my_logger.info(f"\nskip {dev}")
+            my_logger.info(f"skip {dev}")
             continue
         csm_get_dev_policy(**kwargs, dev=dev, gid=gid)
 
 def get_dev_policy_hit_xml(**kwargs):
     data_dir = kwargs.get('dir')
     policy_type = kwargs.get('policy_type', 'DeviceAccessRuleUnifiedFirewallPolicy')
-    gid_dev_items=csm_get_gid_dev_items(dir=data_dir, save_csv=False)
+    gid_dev_items=csm_get_gid_dev_items(dir=data_dir)
     for gid, dev in gid_dev_items:
         dev_policy_file = data_dir + fr"\{dev}.{policy_type}.xlsx"
         if not os.path.exists(dev_policy_file):
@@ -702,19 +660,6 @@ def get_dev_policy_hit_xml(**kwargs):
             xml_file = data_dir + fr"\{dev}.{policy_type}.batch{i + 1}.xml"
             str2file(file=xml_file, str=result)
 
-"""
-int 
-{'gid': '00000000-0000-0000-0000-000000000213'}
-
-src/dst 
-{'networkObjectGIDs': {'gid': '00000000-0000-0000-0000-000000000100'}}
-{'networkObjectGIDs': {'gid': ['00000000-0000-0000-0003-466038615247', '00000000-0000-0000-0003-466038615262']}}
-{'ipData': ['10.99.40.90', '10.99.40.91', '10.99.140.91', '10.99.40.93']}
-
-svc 
-{'serviceObjectGIDs': {'gid': '00000000-0000-0000-0000-000000001041'}}
-{'serviceParameters': [{'protocol': 'tcp', 'sourcePort': None, 'destinationPort': {'port': '445'}}, {'protocol': 'tcp', 'sourcePort': None, 'destinationPort': {'port': '135'}}]}
-"""
 def map_gid_in_policy(**kwargs):
     df = kwargs.get('df')
     sub_df = kwargs.get('sub_df')
@@ -791,10 +736,8 @@ def policy_p0_render_gid_reference(**kwargs):  # L1 obj name, match fw config
     data_dir = kwargs.get('dir')
     policy_type = kwargs.get('policy_type', 'DeviceAccessRuleUnifiedFirewallPolicy')
     
-    print(f"\npolicy_p0_render_gid_reference\n")
-
-    csv_file = data_dir + fr"\csm.groups.csv"
-    df = pd.read_csv(csv_file)[['gid', 'name']].drop_duplicates().sort_values('name', key=lambda col: col.str.lower())
+    print(f"\npolicy_p0_render_gid_reference\n")    
+    df = pd.read_excel(data_dir + fr"\csm.groups.xlsx")[['gid', 'name']].drop_duplicates().sort_values('name', key=lambda col: col.str.lower())
     gid_dev_items = list(df.itertuples(index=False, name=None))
     for gid, dev in gid_dev_items:
         if re.search(dev_exclude_regex, dev) or (dev_regex and not re.search(dev_regex, dev)):
@@ -875,8 +818,6 @@ def render_nw(**kwargs):
                 _df = new_df[new_df['parentGID'] == gid]
                 print(f"{gid} in parentGID")
             assert len(_df) == 1
-            # if len(_df) != 1:
-            #     pass
             name = _df['name'].iloc[0]            
             print(f"level {level} {gid, name}")
 
@@ -1040,8 +981,7 @@ def policy_p1_render_gid_reference(**kwargs):  # leaf obj and content
 
     print(fr"\policy_p1_render_gid_reference\n")
 
-    csv_file = data_dir + fr"\csm.groups.csv"
-    df = pd.read_csv(csv_file)[['gid', 'name']].drop_duplicates().sort_values('name', key=lambda col: col.str.lower())
+    df = pd.read_excel(data_dir + fr"\csm.groups.xlsx")[['gid', 'name']].drop_duplicates().sort_values('name', key=lambda col: col.str.lower())
     gid_dev_items = list(df.itertuples(index=False, name=None))
     name_func_items = [
         ('InterfaceRolePolicyObject', render_int),
@@ -1077,25 +1017,7 @@ def policy_p1_render_gid_reference(**kwargs):  # leaf obj and content
                 for item in ['refGIDs', 'sources',	'destinations', 'info']:
                     save_item_in_ext_file(**kwargs, dev=dev, df=new_df[name], item=item)
                 new_df[name].to_excel(writer, sheet_name=name, index=False)
-
-"""
-def extract_ip(x):
-    result = ['']
-    ip_regex = r"\d+(\.\d+){3}"  # '192.1.1.1' '10.0.0.0/8'
-    m = re.findall(fr"'({ip_regex}|{ip_regex}/{ip_regex}|{ip_regex}/\d+|::/0)'", x)
-    if m:
-        result = [i[0] for i in m]
-    return result
-
-def extract_port(x):
-    result = ['']
-    port_regex = r"'((ip|icmp|tcp|udp)(:[^']*)?)'"  # '192.1.1.1'
-    m = re.findall(port_regex, x)
-    if m:
-        result = [i[0] for i in m]
-    return result
-"""
-
+                
 def extract_ip_port(**kwargs):
     df = kwargs.get('df')
     cols = ['gid', 'orderId','description','isEnabled','direction','permit','sectionName','policyName',
@@ -1154,14 +1076,11 @@ def extract_ip_port(**kwargs):
     return new_df
 
 def policy_p2_render_ip_port(**kwargs):  # content only for traffic match
+    print("policy_p2_render_ip_port\n")
     dev_regex = kwargs.get('dev_regex')
     data_dir = kwargs.get('dir')
     policy_type = kwargs.get('policy_type', 'DeviceAccessRuleUnifiedFirewallPolicy')
-
-    print(f"\policy_p2_render_ip_port\n")
-
-    csv_file = data_dir + fr"\csm.groups.csv"
-    df = pd.read_csv(csv_file)[['gid', 'name']].drop_duplicates().sort_values('name', key=lambda col: col.str.lower())
+    df = pd.read_excel(data_dir + fr"\csm.groups.xlsx")[['gid', 'name']].drop_duplicates().sort_values('name', key=lambda col: col.str.lower())
     gid_dev_items = list(df.itertuples(index=False, name=None))
     for gid, dev in gid_dev_items:
         if re.search(dev_exclude_regex, dev) or (dev_regex and not re.search(dev_regex, dev)):
@@ -1194,13 +1113,6 @@ def policy_p2_render_ip_port(**kwargs):  # content only for traffic match
                 # save_item_in_ext_file(df=new_df[name], item='info')
                 new_df[name].to_excel(writer, sheet_name=name, index=False)
 
-def csm_job(**kwargs):
-    data_dir = kwargs.get('dir')
-    t_now = datetime.now().replace(microsecond=0, second=0)
-    print(f"{str(t_now)}")
-    csm_get_info(**kwargs)
-    csm_all_dev_policy_2_sheet(dir=data_dir, gid_dev_items=csm_get_gid_dev_items(dir=data_dir))
-
 def copy_files(**kwargs):
     dst_dir = kwargs.get('dst_dir')
     src_files = kwargs.get('src_files')
@@ -1208,9 +1120,6 @@ def copy_files(**kwargs):
         shutil.copy(file, dst_dir)
 
 def csm_post_process(**kwargs):
-    data_dir = kwargs.get('dir')
-    dst_dir = kwargs.get('dst_dir', data_dir)
-    dev_regex = kwargs.get('dev_regex')
     process_stages = [
         policy_p0_render_gid_reference, 
         policy_p1_render_gid_reference, 
@@ -1219,21 +1128,30 @@ def csm_post_process(**kwargs):
     stages = kwargs.get('stages', len(process_stages))
     for process_func in process_stages[:stages]:
         process_func(**kwargs)
-    # copy_files(src_files=data_dir + fr'\*.txt', dst_dir=dst_dir)  # over 32k
-    # copy_files(src_files=data_dir + fr'\*.xlsx', dst_dir=dst_dir)
+
+def csm_job(**kwargs):
+    global my_logger, svc_usr, svc_pwd
+    svc_usr, svc_pwd = get_svc_cred(file=cred_dir + fr'\{svc_cred_file}', mode='manual')
+    if not all([svc_usr, svc_pwd]):
+        return
+
+    my_logger = csm_cfg.my_logger
+    kwargs['source'] = data_type
+    data_dir = mk_day_dir(**kwargs)
+    my_logger.info(f'\nstart: {datetime.now().replace(microsecond=0)}')
+    if csm_Login():
+        csm_get_info(dir=data_dir, dev_regex=dev_regex)
+        csm_Logout()
+        csm_all_dev_policy_2_sheet(dir=data_dir, dev_regex=dev_regex, gid_dev_items=csm_get_gid_dev_items(dir=data_dir))
+        csm_post_process(dir=data_dir, stages=1, dev_regex=dev_regex)
+    else:
+        my_logger.info(f'Login failed.')
+    my_logger.info(f'end: {datetime.now().replace(microsecond=0)}')
 
 if __name__ == '__main__':
-    data_dir = csm_cfg.data_dir
-    share_dir = csm_cfg.share_dir
-    non_prd_regex = csm_cfg.non_prd_regex
-    my_logger = set_logger(file=data_dir + fr'\csm_api.log')
-    csm_job(csm=csm_cfg.csm, dir=data_dir, dev_regex=non_prd_regex)
-    shutil.copytree(data_dir, share_dir, dirs_exist_ok=True)  # overwrite
-    # [os.remove(f) for f in glob(fr"{data_dir}\*.xml") if 'csm.groups.xml' != Path(f).name]
-    # [os.remove(f) for f in glob(fr"{data_dir}\*") if not re.search(non_prd_regex, Path(f).name) and f[-4:] != '.log']
-    # csm_post_process(dir=local_dir, dev_regex='npd', stages=1)
-    exit(0)
-
-    # csm_Logout(csm=csm, cookie_file=cur_dir + fr'\cookie.txt')
-    # exit()
-    
+    """
+    cookie = ''
+    my_logger = csm_cfg.my_logger
+    csm_Logout()
+    """
+    csm_job()
