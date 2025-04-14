@@ -1,5 +1,6 @@
 import os
 import sys
+import subprocess
 from glob import glob
 import shutil
 import logging
@@ -11,8 +12,23 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+import atexit
+import openpyxl
+import yaml
+
+my_logger = None
+
+def cleanup_log_file(logger, log_file):
+    for handler in logger.handlers:
+        if isinstance(handler, logging.FileHandler):
+            handler.close()        
+    if log_file.exists() and os.path.getsize(log_file) == 0:
+        os.remove(log_file)
 
 def set_logger(**kwargs):
+    log_file = kwargs.get('file', 'job.log')
+    log_file = Path(log_file)
+
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
     # formatter = logging.Formatter('%(asctime)s| %(message)s', '%Y%m%d %H:%M:%S')
@@ -21,17 +37,14 @@ def set_logger(**kwargs):
     stdout_handler.setLevel(logging.DEBUG)
     stdout_handler.setFormatter(formatter)
 
-    log_file = kwargs.get('file', 'csm.log')
-    log_file = Path(log_file)
-    # if os.path.exists(log_file):
-    #     os.remove(log_file)
-        
     file_handler = logging.FileHandler(log_file)
     file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(formatter)
 
     logger.addHandler(file_handler)
     logger.addHandler(stdout_handler)
+
+    atexit.register(cleanup_log_file, logger, log_file)
     return logger                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        
 
 def file_up_to_date(**kwargs):
@@ -131,3 +144,73 @@ def parallel_func(**kwargs):
         if q:
             results += [p.result() for p in q]
     return results
+
+def rename_excel_sheet(**kwargs):
+    file = kwargs.get('file')
+    sheet_map = kwargs.get('sheet_map', {
+        'vs_profile': 'vs.profiles',
+        'member': 'pool.members',
+        'profile_list': 'profile.data' 
+        })
+    ss = openpyxl.load_workbook(file)
+    for old, new in sheet_map.items():
+        if new in ss.sheetnames:
+            continue
+        ss_sheet = ss[old]
+        ss_sheet.title = new
+    ss.save(file)
+
+def encrypt_password(password):
+    powershell_command = f"""
+    $password = "{password}"
+    $securePassword = ConvertTo-SecureString $password -AsPlainText -Force
+    $encryptedPassword = $securePassword | ConvertFrom-SecureString
+    $encryptedPassword
+    """
+    return subprocess.run(["powershell", "-Command", powershell_command], capture_output=True, text=True).stdout.strip()    
+
+def decrypt_password(encrypted_password):
+    powershell_command = f"""
+    $encryptedPassword = "{encrypted_password}"
+    $securePassword = $encryptedPassword | ConvertTo-SecureString
+    $decryptedPassword = [System.Net.NetworkCredential]::new("", $securePassword).Password
+    $decryptedPassword
+    """
+    return subprocess.run(["powershell", "-Command", powershell_command], capture_output=True, text=True).stdout.strip()
+
+def get_svc_cred(**kwargs):
+    file = kwargs.get('file')
+    mode = kwargs.get('mode', 'auto')
+    save_flag = kwargs.get('save_flag')
+    if os.path.exists(file):
+        usr, pwd = [decrypt_password(x) for x in file2str(file=file).split('\n')]
+    else:
+        if mode in ['manual']:
+            usr, pwd = input('svc:'), input('svc pwd:')
+            if save_flag:
+                str2file(str=f'{encrypt_password(usr)}\n{encrypt_password(pwd)}', file=file)
+        else:
+            usr, pwd = '' ,''
+            my_logger.info(f'no {file}')
+    return usr, pwd
+
+def mk_day_dir(**kwargs):
+    source = kwargs.get('source')
+    day = kwargs.get('day', datetime.now().strftime('%Y%m%d'))
+    data_dir=fr'D:\data\{day}\{source}'
+    os.makedirs(data_dir, exist_ok=True)
+    return data_dir
+
+def check_dirs(**kwargs):
+    dirs = kwargs.get('dirs')
+    for d in dirs:
+        if not os.path.exists(d):
+            my_logger.info(f'no {d}')
+            return False
+    return True
+
+def read_yaml_file(**kwargs):
+    file = kwargs.get('file')
+    with open(file, 'r') as f:
+        data = yaml.safe_load(f)
+    return data
