@@ -1,8 +1,13 @@
-import os
-from datetime import datetime
+from common_cfg import *
+import common_utils
+from common_utils import *
+
+data_type = 'Firewall'
+sys_name = 'csm'
+log_file = mk_day_dir(source=data_type) + fr'\{sys_name}.log'
+common_utils.my_logger = my_logger = set_logger(file=log_file)
 
 csm = 'csm'
-today = datetime.now().strftime('%Y%m%d')
-share_dir = f'D:\csm\data\{today}\csm'
-data_dir=f'D:\data\{today}\csm'
-os.makedirs(data_dir, exist_ok=True)
+dev_regex = 'fw'
+dev_exclude_regex = r'[_-](sys|admin|prd)(_|-|$)'
+svc_cred_file = f'{sys_name}.cred'
