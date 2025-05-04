@@ -4,6 +4,7 @@ from common_utils import *
 
 data_type = 'F5'
 sys_name = 'f5'
+data_dir = mk_day_dir(source=data_type)
 log_file = mk_day_dir(source=data_type) + fr'\{sys_name}.log'
 common_utils.my_logger = my_logger = set_logger(file=log_file)
 
