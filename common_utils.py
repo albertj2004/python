@@ -96,6 +96,13 @@ def task(name, **kwargs):
     print(result)
     return result
 
+def run_thread_parallel(task, *args, **kwargs):  # map args, kwargs const
+    max_workers = kwargs.get('max_workers', 32)
+    task_args = [(arg, kwargs) for arg in args]
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        results = list(executor.map(lambda p: task(p[0], **p[1]), task_args))  # iterator
+    return results
+
 def parallel_func(**kwargs):
     func_list = kwargs.get('func')
     args_list = kwargs.get('args')
