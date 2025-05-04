@@ -275,25 +275,29 @@ def hitcnt_pipeline(**kwargs):
     explode_csm_fw_rule(dir=data_dir, dev=dev)
     map_explode_csm_fw_rule_2_cfg(dir=data_dir, dev=dev)
     concat_explode_csm_fw_rule_cfg_n_hit(dir=data_dir, dev=dev)
-
-def fw_hit_job(**kwargs):
-    global data_dir, my_logger, svc_usr, svc_pwd
-    """
-    svc_usr, svc_pwd = get_svc_cred(file=cred_dir + fr'\{svc_cred_file}')
-    if not all([svc_usr, svc_pwd]):
-        return
-    """
-    my_logger = fw_hit_cfg.my_logger
-    kwargs['source'] = data_type
-    data_dir = mk_day_dir(**kwargs)
-    my_logger.info(f'\nstart: {datetime.now().replace(microsecond=0)}')
-    get_fw_hit_cnt(fw_ip_list=fw_ip_list)
-    parse_fw_sh_acl_all(fw_list=fw_list, dir=data_dir, suffix='acl.hit')
-
-    kwargs_list = [{'dir': data_dir, 'dev': fw, 'suffix': 'acl.hit'} for fw in fw_list]
-    parallel_func(func=hitcnt_pipeline, kwargs=kwargs_list, max_worker=len(fw_list))
     
-    my_logger.info(f'end: {datetime.now().replace(microsecond=0)}')
+def check_result_up_to_date(**kwargs):
+    data_dir = kwargs.get('dir')
+    devs = kwargs.get('devs')
+    result = True
+    for dev in devs:
+        if not file_up_to_date(file=data_dir + fr'\{dev}.acl.hit.xlsx'):
+            result = False
+            break
+    return result
+    
+def fw_hit_job(**kwargs):
+    if not check_result_up_to_date(dir=data_dir, devs=fw_list):
+        svc_usr, svc_pwd, enable_pwd = get_svc_cred(file=cred_dir + fr'\{svc_cred_file}', enable_pwd_flag=True)
+        if all([svc_usr, svc_pwd, enable_pwd]):
+            get_fw_hit_cnt(fw_ip_list=fw_ip_list)
+            parse_fw_sh_acl_all(fw_list=fw_list, dir=data_dir, suffix='acl.hit')
+            kwargs_list = [{'dir': data_dir, 'dev': fw, 'suffix': 'acl.hit'} for fw in fw_list]
+            parallel_func(func=hitcnt_pipeline, kwargs=kwargs_list, max_worker=len(fw_list))
 
 if __name__ == '__main__':
+    rsa_pin = getpass('RSA PIN(4):')
+    my_logger.info(f'\nstart: {datetime.now().replace(microsecond=0)}')
     fw_hit_job()
+    my_logger.info(f'end: {datetime.now().replace(microsecond=0)}')
+
