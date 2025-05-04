@@ -8,6 +8,7 @@ from getpass import getuser, getpass
 
 data_type = 'Firewall'
 sys_name = 'fw.hit'
+data_dir = mk_day_dir(source=data_type)
 log_file = mk_day_dir(source=data_type) + fr'\{sys_name}.log'
 common_utils.my_logger = my_logger = set_logger(file=log_file)
 
